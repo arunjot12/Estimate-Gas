@@ -1,119 +1,63 @@
 const { ethers } = require("ethers");
 
 async function main() {
-    // Configuration
-    const RPC_URL = "http://127.0.0.1:8545"; // Default Reef/Frontier RPC port, could be 9933
-    const CURRENT_RATIO = 9000;
-    const TARGET_GAS = 50000;
-
-    // -------------------------------------------------------------------------------- //
-    // 📝 PASTE YOUR FAILING TRANSACTION DATA HERE                                      //
-    // -------------------------------------------------------------------------------- //
-    const transaction = {
-        // to: "0x...", 
-        // data: "0x...",
-        // value: ethers.parseEther("0"), 
-
-        // Example: a simple transfer to self (replace with your actual failing call)
-        // We will default to sending to SELF (Alice) to ensure a valid base case.
-        to: "0x6f6e071e053358055e8dfa856037c0f4ff00c315",
-        value: 0,
-
-        // ⚠️ DEBUG: Standard gas limit for a simple transfer
-        gasLimit: 1_000_000,
-
-        // ⚠️ IMPORTANT: Set a valid sender address with sufficient funds
-        from: ethers.getAddress("0x6f6e071e053358055e8dfa856037c0f4ff00c315"), // Default Alice EVM address for local dev (lowercased)
-
-        // Force Legacy Transaction
-        type: 0
-    };
-    // -------------------------------------------------------------------------------- //
-
-    console.log(`🔌 Connecting to ${RPC_URL}...`);
+    const RPC_URL = "http://127.0.0.1:8545";
     const provider = new ethers.JsonRpcProvider(RPC_URL);
+
+    // Alice Address (Sender)
+    const sender = "0xf24FF3a9CF04c71Dbc94D0b566f7A27B94566cac";
+    const target = sender; // Self-transfer for baseline
+
+    console.log(`🔌 Connecting to ${RPC_URL}`);
+    console.log(`👤 Sender: ${sender}`);
 
     try {
         const network = await provider.getNetwork();
-        console.log(`🔗 Connected to chain ID: ${network.chainId}`);
+        console.log(`🔗 Chain ID: ${network.chainId}`);
 
-        // Fetch Gas Price for legacy tx
-        const feeData = await provider.getFeeData();
-        // Ensure min gas price of 1 gwei to avoid spam filters
-        const minGasPrice = ethers.parseUnits("1", "gwei");
-        transaction.gasPrice = feeData.gasPrice > minGasPrice ? feeData.gasPrice : minGasPrice;
+        const balance = await provider.getBalance(sender);
+        console.log(`💰 Balance: ${ethers.formatEther(balance)} REEF`);
 
-        console.log(`⛽ Gas Price: ${ethers.formatUnits(transaction.gasPrice, "gwei")} gwei`);
+        // Create transaction object for estimation
+        // IMPORTANT: Do NOT set gasPrice/maxFeePerGas for estimation on this node
+        // as it seems to trigger validation errors. Let the node default.
+        const transaction = {
+            from: sender,
+            to: target,
+            value: 1, // 1 wei to trigger transfer logic
+            data: "0x", // Empty data for transfer, or "0xdeadbeef" for intrinsic test
+        };
 
-        // 0. Check Block Gas Limit
-        const block = await provider.getBlock("latest");
-        if (block) {
-            console.log(`🧱 Latest Block Gas Limit: ${block.gasLimit}`);
-            if (BigInt(transaction.gasLimit) > block.gasLimit) {
-                console.warn(`⚠️ WARNING: Your gasLimit (${transaction.gasLimit}) exceeds the block gas limit (${block.gasLimit}). This might cause immediate failure.`);
-            }
-        }
-        // 1. Check Balance
-        if (transaction.from) {
-            const balance = await provider.getBalance(transaction.from);
-            console.log(`💰 Balance of ${transaction.from}: ${ethers.formatEther(balance)} REEF`);
-            if (balance === 0n) {
-                console.warn("⚠️ WARNING: Sender has 0 balance. Gas estimation may fail.");
-            }
-        }
+        console.log("\n� Estimating Gas...");
+        const estimatedGas = await provider.estimateGas(transaction);
 
-        // 2. Try eth_call (Simulation) first to catch reverts with reason
-        console.log("🔍 Simulating transaction (eth_call)...");
-        try {
-            const result = await provider.call(transaction);
-            console.log("✅ Simulation successful:", result);
-        } catch (callError) {
-            console.error("❌ Simulation Reverted:", callError.reason || callError.message);
-            if (callError.data) {
-                console.error("   Revert Data:", callError.data);
-            }
-            // If simulation fails, estimation will likely fail too, but we proceed anyway debugging
-        }
+        console.log(`✅ Gas Estimate: ${estimatedGas.toString()}`);
 
-        // 3. Estimate Gas
-        console.log("🚀 Sending eth_estimateGas with high gas limit...");
-        const gasEstimate = await provider.estimateGas(transaction);
+        // Analysis
+        const TARGET_GAS = 21000n; // Standard EVM Transfer
+        const currentGas = estimatedGas;
 
-        console.log(`\n✅ Gas Estimate Successful: ${gasEstimate.toString()}`);
+        // If current is huge (e.g. 1.3 Billion), and we want 21,000.
+        // Ratio = Current / Target
+        const ratio = currentGas / TARGET_GAS;
 
-        // Calculate new Ratio
-        // NewRatio = OldRatio * (EstimatedGas / 50000)
-        const estimateNumber = Number(gasEstimate);
-        const newRatio = Math.round(CURRENT_RATIO * (estimateNumber / TARGET_GAS));
+        console.log("\n🧮 Tuning Analysis:");
+        console.log(`   Current Estimate: ${currentGas}`);
+        console.log(`   Target Estimate : ${TARGET_GAS}`);
+        console.log(`   Approximate Factor: ${ratio}`);
 
-        console.log("\n📊 Analysis & Recommendation:");
-        console.log(`   - Current Ratio: ${CURRENT_RATIO}`);
-        console.log(`   - Target Gas:    ${TARGET_GAS}`);
-        console.log(`   - Est. Actual:   ${estimateNumber}`);
-        console.log(`\n💡 SUGGESTED CHANGE:`);
-        console.log(`   Update 'RATIO' in 'runtime/common/src/lib.rs':`);
-        console.log(`   --------------------------------------------`);
-        console.log(`   pub const RATIO: u64 = ${newRatio};`);
-        console.log(`   --------------------------------------------`);
+        console.log(`\n💡 To fix this, you need to adjust 'GasToWeight' or 'GasLimit' constants in the runtime.`);
+        console.log(`   If your 'GasToWeight' is currently 1 (1 Gas = 1 Weight), check if 'WEIGHT_PER_SECOND' is calibrated correctly.`);
+        console.log(`   Usually, 1 Gas should be significantly LESS than 1 Weight if Weight is picoseconds.`);
+        console.log(`   However, if you see 1.3 Billion Gas, it means the NODE thinks the operation is very expensive.`);
 
     } catch (error) {
-        console.error("\n❌ Gas Estimation Failed:");
-
+        console.error("❌ Estimation Failed:");
         if (error.info && error.info.error) {
-            console.error("   RPC Error Code:", error.info.error.code);
-            console.error("   RPC Error Message:", error.info.error.message);
-            if (error.info.error.data) {
-                console.error("   RPC Error Data:", error.info.error.data);
-            }
+            console.log("   RPC Error:", error.info.error);
         } else {
-            console.error("   Error:", error.message);
+            console.log("   Error:", error.message);
         }
-
-        console.log("\n💡 Troubleshooting:");
-        console.log("   - Check if the 'from' address has funds (REEF).");
-        console.log("   - Ensure the transaction logic doesn't revert (e.g., check requires in contract).");
-        console.log("   - Verify allow/block list configuration on the node.");
-        console.log("   - 'Invalid call' often means the transaction failed execution check (e.g. fees, signature, or revert).");
     }
 }
 
